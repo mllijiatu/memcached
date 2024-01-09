@@ -831,88 +831,83 @@ struct _io_pending_t {
  * The structure representing a connection into memcached.
  */
 struct conn {
-    sasl_conn_t *sasl_conn;
-    int    sfd;
-    bool sasl_started;
-    bool authenticated;
-    bool set_stale;
-    bool mset_res; /** uses mset format for return code */
-    bool close_after_write; /** flush write then move to close connection */
-    bool rbuf_malloced; /** read buffer was malloc'ed for ascii mget, needs free() */
-    bool item_malloced; /** item for conn_nread state is a temporary malloc */
+    sasl_conn_t *sasl_conn;       // SASL连接
+    int sfd;                      // 连接的文件描述符
+    bool sasl_started;            // 是否已经启动SASL
+    bool authenticated;           // 是否已经认证通过
+    bool set_stale;               // 是否设置为stale状态
+    bool mset_res;                // 是否使用mset格式的返回码
+    bool close_after_write;       // 写入后是否关闭连接
+    bool rbuf_malloced;           // 读缓冲是否通过malloc分配
+    bool item_malloced;           // item是否通过malloc分配
 #ifdef TLS
-    SSL    *ssl;
-    char   *ssl_wbuf;
-    bool ssl_enabled;
+    SSL *ssl;                     // SSL连接
+    char *ssl_wbuf;               // SSL写缓冲
+    bool ssl_enabled;             // 是否启用SSL
 #endif
-    enum conn_states  state;
-    enum bin_substates substate;
-    rel_time_t last_cmd_time;
-    struct event event;
-    short  ev_flags;
-    short  which;   /** which events were just triggered */
+    enum conn_states state;        // 连接状态
+    enum bin_substates substate;   // 二进制协议的子状态
+    rel_time_t last_cmd_time;      // 上一次命令的时间
+    struct event event;            // 事件结构
+    short ev_flags;                // 事件标志
+    short which;                   // 哪些事件刚刚触发
 
-    char   *rbuf;   /** buffer to read commands into */
-    char   *rcurr;  /** but if we parsed some already, this is where we stopped */
-    int    rsize;   /** total allocated size of rbuf */
-    int    rbytes;  /** how much data, starting from rcur, do we have unparsed */
+    char *rbuf;                    // 读取命令的缓冲区
+    char *rcurr;                   // 如果已解析一些命令，此处是停止解析的位置
+    int rsize;                     // rbuf的总分配大小
+    int rbytes;                    // 从rcurr开始有多少未解析的数据
 
-    mc_resp *resp; // tail response.
-    mc_resp *resp_head; // first response in current stack.
-    char   *ritem;  /** when we read in an item's value, it goes here */
-    int    rlbytes;
+    mc_resp *resp;                 // 尾部响应
+    mc_resp *resp_head;            // 当前栈中的第一个响应
+    char *ritem;                   // 读取项值时的缓冲区
+    int rlbytes;
 
-    /**
-     * item is used to hold an item structure created after reading the command
-     * line of set/add/replace commands, but before we finished reading the actual
-     * data. The data is read into ITEM_data(item) to avoid extra copying.
-     */
+    void *item;                    // 用于保存在读取set/add/replace命令行之后但尚未完成读取实际数据的项结构
 
-    void   *item;     /* for commands set/add/replace  */
+    /* swallow状态的数据 */
+    int sbytes;                    // 要吞噬的字节数
 
-    /* data for the swallow state */
-    int    sbytes;    /* how many bytes to swallow */
-
-    int io_queues_submitted; /* see notes on io_queue_t */
-    io_queue_t io_queues[IO_QUEUE_COUNT]; /* set of deferred IO queues. */
+    int io_queues_submitted;       // 已提交的IO队列数量
+    io_queue_t io_queues[IO_QUEUE_COUNT]; // 一组延迟IO队列
 #ifdef PROXY
-    unsigned int proxy_coro_ref; /* lua reference for active coroutine */
+    unsigned int proxy_coro_ref;   // 活跃协程的Lua引用
 #endif
 #ifdef EXTSTORE
-    unsigned int recache_counter;
+    unsigned int recache_counter;  // 重新缓存的计数器
 #endif
-    enum protocol protocol;   /* which protocol this connection speaks */
-    enum network_transport transport; /* what transport is used by this connection */
-    enum close_reasons close_reason; /* reason for transition into conn_closing */
+    enum protocol protocol;        // 连接使用的协议
+    enum network_transport transport; // 连接使用的传输方式
+    enum close_reasons close_reason; // 连接关闭的原因
 
-    /* data for UDP clients */
-    int    request_id; /* Incoming UDP request ID, if this is a UDP "connection" */
-    struct sockaddr_in6 request_addr; /* udp: Who sent the most recent request */
+    /* UDP客户端的数据 */
+    int request_id;                // 如果这是UDP "连接"，则为传入UDP请求的ID
+    struct sockaddr_in6 request_addr; // UDP：发送最近请求的人
     socklen_t request_addr_size;
 
-    bool   noreply;   /* True if the reply should not be sent. */
-    /* current stats command */
+    bool noreply;                  // 如果不应发送回复，则为true
+    /* 当前的stats命令 */
     struct {
         char *buffer;
         size_t size;
         size_t offset;
     } stats;
 
-    /* Binary protocol stuff */
-    /* This is where the binary header goes */
+    /* 二进制协议相关 */
+    /* 这是二进制头的位置 */
     protocol_binary_request_header binary_header;
-    uint64_t cas; /* the cas to return */
-    uint64_t tag; /* listener stocket tag */
-    short cmd; /* current command being processed */
+    uint64_t cas;                  // 要返回的cas
+    uint64_t tag;                  // 监听套接字的标签
+    short cmd;                     // 当前正在处理的命令
     int opaque;
     int keylen;
-    conn   *next;     /* Used for generating a list of conn structures */
-    LIBEVENT_THREAD *thread; /* Pointer to the thread object serving this connection */
-    int (*try_read_command)(conn *c); /* pointer for top level input parser */
-    ssize_t (*read)(conn  *c, void *buf, size_t count);
+    conn *next;                    // 用于生成conn结构列表
+    LIBEVENT_THREAD *thread;        // 指向为该连接提供服务的线程对象的指针
+    int (*try_read_command)(conn *c); // 顶级输入解析器的指针
+    ssize_t (*read)(conn *c, void *buf, size_t count);
     ssize_t (*sendmsg)(conn *c, struct msghdr *msg, int flags);
     ssize_t (*write)(conn *c, void *buf, size_t count);
 };
+
 
 /* array of conn structures, indexed by file descriptor */
 extern conn **conns;
