@@ -1640,10 +1640,10 @@ static int _store_item_copy_data(int comm, item *old_it, item *new_it, item *add
  * Returns the state of storage.
  */
 enum store_item_type
-do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nbytes, uint64_t *cas, bool cas_stale) {
-    char *key = ITEM_key(it);
-    item *old_it = do_item_get(key, it->nkey, hv, t, DONT_UPDATE);
-    enum store_item_type stored = NOT_STORED;
+enum store_item_type do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nbytes, uint64_t *cas, bool cas_stale) {
+    char *key = ITEM_key(it);  // 获取项目的键
+    item *old_it = do_item_get(key, it->nkey, hv, t, DONT_UPDATE);  // 获取哈希表中与键匹配的旧项目
+    enum store_item_type stored = NOT_STORED;  // 存储操作的结果
 
     enum cas_result {
         CAS_NONE,
@@ -1656,12 +1656,12 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
     item *new_it = NULL;
     client_flags_t flags;
 
-    /* Do the CAS test up front so we can apply to all store modes */
+    // 在执行存储操作之前进行CAS测试，以便可以适用于所有存储模式
     enum cas_result cas_res = CAS_NONE;
 
     bool do_store = false;
     if (old_it != NULL) {
-        // Most of the CAS work requires something to compare to.
+        // 大多数CAS工作都需要比较对象
         uint64_t it_cas = ITEM_get_cas(it);
         uint64_t old_cas = ITEM_get_cas(old_it);
         if (it_cas == 0) {
@@ -1676,23 +1676,21 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
 
         switch (comm) {
             case NREAD_ADD:
-                /* add only adds a nonexistent item, but promote to head of LRU */
+                // add仅添加不存在的项目，但将其提升到LRU的头部
                 do_item_update(old_it);
                 break;
             case NREAD_CAS:
                 if (cas_res == CAS_MATCH) {
-                    // cas validates
-                    // it and old_it may belong to different classes.
-                    // I'm updating the stats for the one that's getting pushed out
+                    // CAS验证成功
+                    // it和old_it可能属于不同的类
+                    // 我正在更新被推出的那个的统计信息
                     pthread_mutex_lock(&t->stats.mutex);
                     t->stats.slab_stats[ITEM_clsid(old_it)].cas_hits++;
                     pthread_mutex_unlock(&t->stats.mutex);
                     do_store = true;
                 } else if (cas_res == CAS_STALE) {
-                    // if we're allowed to set a stale value, CAS must be lower than
-                    // the current item's CAS.
-                    // This replaces the value, but should preserve TTL, and stale
-                    // item marker bit + token sent if exists.
+                    // 如果允许设置过期值，则CAS必须小于当前项目的CAS
+                    // 这将替换值，但应保留TTL，过期的项目标志位以及令牌（如果存在）。
                     it->exptime = old_it->exptime;
                     it->it_flags |= ITEM_STALE;
                     if (old_it->it_flags & ITEM_TOKEN_SENT) {
@@ -1704,15 +1702,15 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
                     pthread_mutex_unlock(&t->stats.mutex);
                     do_store = true;
                 } else {
-                    // NONE or BADVAL are the same for CAS cmd
+                    // NONE或BADVAL对于CAS命令来说是相同的
                     pthread_mutex_lock(&t->stats.mutex);
                     t->stats.slab_stats[ITEM_clsid(old_it)].cas_badval++;
                     pthread_mutex_unlock(&t->stats.mutex);
 
                     if (settings.verbose > 1) {
-                        fprintf(stderr, "CAS:  failure: expected %llu, got %llu\n",
-                                (unsigned long long) ITEM_get_cas(old_it),
-                                (unsigned long long) ITEM_get_cas(it));
+                        fprintf(stderr, "CAS: 失败：预期 %llu，实际 %llu\n",
+                                (unsigned long long)ITEM_get_cas(old_it),
+                                (unsigned long long)ITEM_get_cas(it));
                     }
                     stored = EXISTS;
                 }
@@ -1726,31 +1724,30 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
                     break;
                 }
 #ifdef EXTSTORE
-                    if ((old_it->it_flags & ITEM_HDR) != 0)
-                    {
-                        /* block append/prepend from working with extstore-d items.
-                         * leave response code to NOT_STORED default */
-                        break;
-                    }
+                    if ((old_it->it_flags & ITEM_HDR) != 0) {
+                    // 阻止对extstore-d项目的块追加/前置。
+                    // 将响应代码保留为NOT_STORED的默认值
+                    break;
+                }
 #endif
-                /* we have it and old_it here - alloc memory to hold both */
+                // 我们在这里有it和old_it - 为两者分配内存
                 FLAGS_CONV(old_it, flags);
                 new_it = do_item_alloc(key, it->nkey, flags, old_it->exptime,
                                        it->nbytes + old_it->nbytes - 2 /* CRLF */);
 
-                // OOM trying to copy.
+                // 在复制数据失败时OOM
                 if (new_it == NULL)
                     break;
-                /* copy data from it and old_it to new_it */
+                // 从it和old_it复制数据到new_it
                 if (_store_item_copy_data(comm, old_it, new_it, it) == -1) {
-                    // failed data copy
+                    // 数据复制失败
                     break;
                 } else {
-                    // refcount of new_it is 1 here. will end up 2 after link.
-                    // it's original ref is managed outside of this function
+                    // new_it的引用计数在这里为1。在链接之后将变为2。
+                    // 它的原始引用在此函数外部进行管理
                     it = new_it;
                     do_store = true;
-                    // Upstream final object size for meta
+                    // 为meta更新最终对象大小
                     if (nbytes != NULL) {
                         *nbytes = it->nbytes;
                     }
@@ -1768,15 +1765,15 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
             stored = STORED;
         }
 
-        do_item_remove(old_it); /* release our reference */
+        do_item_remove(old_it);  // 释放我们的引用
         if (new_it != NULL) {
-            // append/prepend end up with an extra reference for new_it.
+            // 追加/前置最终会为new_it多增加一个引用
             do_item_remove(new_it);
         }
     } else {
-        /* No pre-existing item to replace or compare to. */
+        // 无需替换或比较的预先存在的项目
         if (ITEM_get_cas(it) != 0) {
-            /* Asked for a CAS match but nothing to compare it to. */
+            // 请求CAS匹配但没有东西来比较
             cas_res = CAS_MISS;
         }
 
@@ -1788,7 +1785,7 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
                 do_store = true;
                 break;
             case NREAD_CAS:
-                // LRU expired
+                // LRU过期
                 stored = NOT_FOUND;
                 pthread_mutex_lock(&t->stats.mutex);
                 t->stats.cas_misses++;
@@ -1797,7 +1794,7 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
             case NREAD_REPLACE:
             case NREAD_APPEND:
             case NREAD_PREPEND:
-                /* Requires an existing item. */
+                // 需要已存在的项目
                 break;
         }
 
@@ -1816,6 +1813,7 @@ do_store_item(item *it, int comm, LIBEVENT_THREAD *t, const uint32_t hv, int *nb
 
     return stored;
 }
+
 
 /* set up a connection to write a buffer then free it, used for stats */
 void write_and_free(conn *c, char *buf, int bytes) {

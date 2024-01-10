@@ -260,37 +260,36 @@ item_chunk *do_item_alloc_chunk(item_chunk *ch, const size_t bytes_remain) {
 
 item *do_item_alloc(const char *key, const size_t nkey, const client_flags_t flags,
                     const rel_time_t exptime, const int nbytes) {
-    uint8_t nsuffix;
-    item *it = NULL;
-    char suffix[40];
-    // Avoid potential underflows.
+    uint8_t nsuffix;  // 后缀的长度
+    item *it = NULL;  // 指向分配的项目的指针
+    char suffix[40];  // 后缀的字符数组
+    // 避免潜在的下溢。
     if (nbytes < 2)
         return 0;
 
+    // 计算项目的总大小和后缀
     size_t ntotal = item_make_header(nkey + 1, flags, nbytes, suffix, &nsuffix);
     if (settings.use_cas) {
-        ntotal += sizeof(uint64_t);
+        ntotal += sizeof(uint64_t);  // 如果启用CAS，添加CAS字段的大小
     }
 
+    // 根据总大小确定slab class id
     unsigned int id = slabs_clsid(ntotal);
     unsigned int hdr_id = 0;
     if (id == 0)
         return 0;
 
-    /* This is a large item. Allocate a header object now, lazily allocate
-     *  chunks while reading the upload.
-     */
+    /* 这是一个大项目。现在分配一个头部对象，而在读取上传时懒洋洋地分配块。*/
     if (ntotal > settings.slab_chunk_size_max) {
-        /* We still link this item into the LRU for the larger slab class, but
-         * we're pulling a header from an entirely different slab class. The
-         * free routines handle large items specifically.
+        /* 我们仍然将此项目链接到较大的slab class的LRU中，
+         * 但是我们从完全不同的slab class中拉取头部。free例程专门处理大项目。
          */
         int htotal = nkey + 1 + nsuffix + sizeof(item) + sizeof(item_chunk);
         if (settings.use_cas) {
             htotal += sizeof(uint64_t);
         }
 #ifdef NEED_ALIGN
-        // header chunk needs to be padded on some systems
+        // 在某些系统上，头部块需要填充
         int remain = htotal % 8;
         if (remain != 0) {
             htotal += 8 - remain;
@@ -298,7 +297,7 @@ item *do_item_alloc(const char *key, const size_t nkey, const client_flags_t fla
 #endif
         hdr_id = slabs_clsid(htotal);
         it = do_item_alloc_pull(htotal, hdr_id);
-        /* setting ITEM_CHUNKED is fine here because we aren't LINKED yet. */
+        /* 设置ITEM_CHUNKED在这里是可以的，因为我们还没有链接。 */
         if (it != NULL)
             it->it_flags |= ITEM_CHUNKED;
     } else {
@@ -313,21 +312,19 @@ item *do_item_alloc(const char *key, const size_t nkey, const client_flags_t fla
     }
 
     assert(it->it_flags == 0 || it->it_flags == ITEM_CHUNKED);
-    //assert(it != heads[id]);
 
-    /* Refcount is seeded to 1 by slabs_alloc() */
+    /* Refcount 由slabs_alloc()初始化为1 */
     it->next = it->prev = 0;
 
-    /* Items are initially loaded into the HOT_LRU. This is '0' but I want at
-     * least a note here. Compiler (hopefully?) optimizes this out.
-     */
+    /* 项目最初加载到HOT_LRU中。这是 '0'，但是我想至少在这里留个注释。
+     * 编译器（希望？）会优化掉这个。*/
     if (settings.temp_lru &&
-            exptime - current_time <= settings.temporary_ttl) {
+        exptime - current_time <= settings.temporary_ttl) {
         id |= TEMP_LRU;
     } else if (settings.lru_segmented) {
         id |= HOT_LRU;
     } else {
-        /* There is only COLD in compat-mode */
+        /* 在compat-mode中只有COLD */
         id |= COLD_LRU;
     }
     it->slabs_clsid = id;
@@ -343,7 +340,7 @@ item *do_item_alloc(const char *key, const size_t nkey, const client_flags_t fla
         memcpy(ITEM_suffix(it), &flags, sizeof(flags));
     }
 
-    /* Initialize internal chunk. */
+    /* 初始化内部块。*/
     if (it->it_flags & ITEM_CHUNKED) {
         item_chunk *chunk = (item_chunk *) ITEM_schunk(it);
 
@@ -358,6 +355,7 @@ item *do_item_alloc(const char *key, const size_t nkey, const client_flags_t fla
 
     return it;
 }
+
 
 void item_free(item *it) {
     size_t ntotal = ITEM_ntotal(it);
@@ -496,41 +494,63 @@ static void item_unlink_q(item *it) {
 }
 
 int do_item_link(item *it, const uint32_t hv) {
-    MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
-    assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);
-    it->it_flags |= ITEM_LINKED;
-    it->time = current_time;
+    MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);  // 记录链接日志
+    assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);  // 确保项目未链接或在slab中
+    it->it_flags |= ITEM_LINKED;  // 设置项目的链接标志
+    it->time = current_time;  // 设置项目的链接时间
 
     STATS_LOCK();
-    stats_state.curr_bytes += ITEM_ntotal(it);
-    stats_state.curr_items += 1;
-    stats.total_items += 1;
+    stats_state.curr_bytes += ITEM_ntotal(it);  // 更新当前字节数
+    stats_state.curr_items += 1;  // 更新当前项目数
+    stats.total_items += 1;  // 更新总项目数
     STATS_UNLOCK();
 
-    /* Allocate a new CAS ID on link. */
-    ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
-    assoc_insert(it, hv);
-    item_link_q(it);
-    refcount_incr(it);
-    item_stats_sizes_add(it);
+    /* 分配新的CAS ID在链接时。*/
+    ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);  // 分配新的CAS ID
+    assoc_insert(it, hv);  // 将项目插入哈希表
+    item_link_q(it);  // 将项目链接到LRU队列
+    refcount_incr(it);  // 增加项目的引用计数
+    item_stats_sizes_add(it);  // 更新项目大小的统计信息
 
-    return 1;
+    return 1;  // 返回成功标志
 }
+
+
+/**
+ * 将项目从哈希表和LRU链表中解链，并更新相关的统计信息。
+ * @param it: 要解链的项目
+ * @param hv: 用于计算哈希的散列值
+ */
+
+// 主要步骤：
+//
+// 调用MEMCACHED_ITEM_UNLINK宏，用于记录项目的解链操作。
+// 如果项目已经在LRU链表中（即ITEM_LINKED标志被设置），执行以下操作：
+// 清除项目的ITEM_LINKED标志。
+// 减去项目的字节数和当前项目数的统计信息。
+// 更新统计信息，减去项目的大小。
+// 从哈希表中删除项目。
+// 从LRU链表中解链项目。
+// 释放对项目的引用。
 
 void do_item_unlink(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
+
+    // 如果项目已经在链表中
     if ((it->it_flags & ITEM_LINKED) != 0) {
-        it->it_flags &= ~ITEM_LINKED;
+        it->it_flags &= ~ITEM_LINKED;  // 清除项目的LINKED标志
         STATS_LOCK();
-        stats_state.curr_bytes -= ITEM_ntotal(it);
-        stats_state.curr_items -= 1;
+        stats_state.curr_bytes -= ITEM_ntotal(it);  // 减去项目的字节数
+        stats_state.curr_items -= 1;  // 减去当前项目数
         STATS_UNLOCK();
-        item_stats_sizes_remove(it);
-        assoc_delete(ITEM_key(it), it->nkey, hv);
-        item_unlink_q(it);
-        do_item_remove(it);
+        item_stats_sizes_remove(it);  // 更新统计信息，减去项目的大小
+
+        assoc_delete(ITEM_key(it), it->nkey, hv);  // 从哈希表中删除项目
+        item_unlink_q(it);  // 从LRU链表中解链项目
+        do_item_remove(it);  // 释放对项目的引用
     }
 }
+
 
 /* FIXME: Is it necessary to keep this copy/pasted code? */
 void do_item_unlink_nolock(item *it, const uint32_t hv) {
@@ -548,15 +568,30 @@ void do_item_unlink_nolock(item *it, const uint32_t hv) {
     }
 }
 
-void do_item_remove(item *it) {
-    MEMCACHED_ITEM_REMOVE(ITEM_key(it), it->nkey, it->nbytes);
-    assert((it->it_flags & ITEM_SLABBED) == 0);
-    assert(it->refcount > 0);
+/**
+ * 从引用计数系统中移除项目，并在引用计数归零时释放项目。
+ * @param it: 要移除的项目
+ */
 
+// 主要步骤：
+//
+// 调用MEMCACHED_ITEM_REMOVE宏，用于记录项目的移除操作。
+// 使用assert宏确保项目不是slabbed状态（即不在slab内存块中）。
+// 使用assert宏确保项目的引用计数大于0。
+// 调用refcount_decr函数，将项目的引用计数减1，并检查是否减到0。
+// 如果引用计数减到0，调用item_free函数释放项目。
+
+void do_item_remove(item *it) {
+    MEMCACHED_ITEM_REMOVE(ITEM_key(it), it->nkey, it->nbytes);  // 记录项目的移除操作
+    assert((it->it_flags & ITEM_SLABBED) == 0);  // 确保项目不是slabbed状态
+    assert(it->refcount > 0);  // 确保项目的引用计数大于0
+
+    // 如果引用计数减到0，释放项目
     if (refcount_decr(it) == 0) {
         item_free(it);
     }
 }
+
 
 /* Bump the last accessed time, or relink if we're in compat mode */
 void do_item_update(item *it) {
@@ -973,24 +1008,30 @@ void item_stats_sizes(ADD_STAT add_stats, void *c) {
     mutex_unlock(&stats_sizes_lock);
 }
 
-/** wrapper around assoc_find which does the lazy expiration logic */
+/**
+ * 该函数是对`assoc_find`的封装，执行懒惰过期逻辑。
+ * @param key: 键的字符串表示
+ * @param nkey: 键的长度
+ * @param hv: 哈希值
+ * @param t: 线程的信息
+ * @param do_update: 是否执行更新
+ * @return 成功找到的项目，如果没有找到则为NULL
+ */
+
+// 主要步骤：
+//
+// 调用 assoc_find 在哈希表中查找项目。
+// 如果找到项目，增加其引用计数。
+// 执行懒惰过期逻辑，包括处理flush和过期的情况。
+// 如果启用更新，并且项目未过期，则执行do_item_bump更新项目的LRU时间。
+// 记录查找日志，包括项目是否找到，被刷新或过期，以及其他相关信息。
+// 返回找到的项目或NULL。
 item *do_item_get(const char *key, const size_t nkey, const uint32_t hv, LIBEVENT_THREAD *t, const bool do_update) {
-    item *it = assoc_find(key, nkey, hv);
+    item *it = assoc_find(key, nkey, hv);  // 在哈希表中查找项目
     if (it != NULL) {
-        refcount_incr(it);
-        /* Optimization for slab reassignment. prevents popular items from
-         * jamming in busy wait. Can only do this here to satisfy lock order
-         * of item_lock, slabs_lock. */
-        /* This was made unsafe by removal of the cache_lock:
-         * slab_rebalance_signal and slab_rebal.* are modified in a separate
-         * thread under slabs_lock. If slab_rebalance_signal = 1, slab_start =
-         * NULL (0), but slab_end is still equal to some value, this would end
-         * up unlinking every item fetched.
-         * This is either an acceptable loss, or if slab_rebalance_signal is
-         * true, slab_start/slab_end should be put behind the slabs_lock.
-         * Which would cause a huge potential slowdown.
-         * Could also use a specific lock for slab_rebal.* and
-         * slab_rebalance_signal (shorter lock?)
+        refcount_incr(it);  // 增加引用计数
+        /* 优化用于slab重新分配。防止流行的项目在繁忙等待中卡住。
+         * 只能在这里执行这个优化，以满足item_lock，slabs_lock的锁定顺序。
          */
         /*if (slab_rebalance_signal &&
             ((void *)it >= slab_rebal.slab_start && (void *)it < slab_rebal.slab_end)) {
@@ -1049,11 +1090,11 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv, LIBEVEN
 
     if (settings.verbose > 2)
         fprintf(stderr, "\n");
-    /* For now this is in addition to the above verbose logging. */
+    /* 对于现在，这是上述冗长日志的补充。 */
     LOGGER_LOG(t->l, LOG_FETCHERS, LOGGER_ITEM_GET, NULL, was_found, key,
                nkey, (it) ? it->nbytes : 0, (it) ? ITEM_clsid(it) : 0, t->cur_sfd);
 
-    return it;
+    return it;  // 返回找到的项目或NULL
 }
 
 // Requires lock held for item.

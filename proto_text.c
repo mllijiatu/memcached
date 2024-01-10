@@ -238,10 +238,11 @@ void complete_nread_ascii(conn *c) {
 
     }
 
-    c->set_stale = false; /* force flag to be off just in case */
-    c->mset_res = false;
-    item_remove(c->item);       /* release the c->item reference */
-    c->item = 0;
+    c->set_stale = false;   // 将 set_stale 标志强制设为 false，以防万一
+    c->mset_res = false;    // 将 mset_res 标志设为 false
+    item_remove(c->item);   // 释放 c->item 引用，从哈希表中移除项目
+    c->item = 0;            // 将 c->item 置为 0，清空当前连接的项目引用
+
 }
 
 #define COMMAND_TOKEN 0
@@ -1976,19 +1977,20 @@ static void process_marithmetic_command(conn *c, token_t *tokens, const size_t n
 }
 
 
+// 处理更新命令，例如set、add、replace等
 static void process_update_command(conn *c, token_t *tokens, const size_t ntokens, int comm, bool handle_cas) {
-    char *key;
-    size_t nkey;
-    client_flags_t flags;
-    int32_t exptime_int = 0;
-    rel_time_t exptime = 0;
-    int vlen;
-    uint64_t req_cas_id = 0;
-    item *it;
+    char *key;  // 存储键名
+    size_t nkey;  // 键名长度
+    client_flags_t flags;  // 客户端标志
+    int32_t exptime_int = 0;  // 过期时间的整数表示
+    rel_time_t exptime = 0;  // 实际过期时间
+    int vlen;  // 值的长度
+    uint64_t req_cas_id = 0;  // 请求的 CAS 值
+    item *it;  // 数据项
 
     assert(c != NULL);
 
-    set_noreply_maybe(c, tokens, ntokens);
+    set_noreply_maybe(c, tokens, ntokens);  // 检查是否设置了noreply
 
     if (tokens[KEY_TOKEN].length > KEY_MAX_LENGTH) {
         out_string(c, "CLIENT_ERROR bad command line format");
@@ -1998,16 +2000,17 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     key = tokens[KEY_TOKEN].value;
     nkey = tokens[KEY_TOKEN].length;
 
+    // 解析客户端标志、过期时间和值的长度
     if (!(safe_strtoflags(tokens[2].value, &flags)
           && safe_strtol(tokens[3].value, &exptime_int)
-          && safe_strtol(tokens[4].value, (int32_t * ) & vlen))) {
+          && safe_strtol(tokens[4].value, (int32_t *) &vlen))) {
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
     }
 
     exptime = realtime(EXPTIME_TO_POSITIVE_TIME(exptime_int));
 
-    // does cas value exist?
+    // 是否处理 CAS 值
     if (handle_cas) {
         if (!safe_strtoull(tokens[5].value, &req_cas_id)) {
             out_string(c, "CLIENT_ERROR bad command line format");
@@ -2019,15 +2022,17 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
     }
-    vlen += 2;
+    vlen += 2;  // 加上\r\n的长度
 
     if (settings.detail_enabled) {
-        stats_prefix_record_set(key, nkey);
+        stats_prefix_record_set(key, nkey);  // 记录键名的统计信息
     }
 
+    // 分配并初始化一个数据项
     it = item_alloc(key, nkey, flags, exptime, vlen);
 
     if (it == 0) {
+        // 数据项分配失败的处理
         enum store_item_type status;
         if (!item_size_ok(nkey, flags, vlen)) {
             out_string(c, "SERVER_ERROR object too large for cache");
@@ -2048,8 +2053,8 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         conn_set_state(c, conn_swallow);
         c->sbytes = vlen;
 
-        /* Avoid stale data persisting in cache because we failed alloc.
-         * Unacceptable for SET. Anywhere else too? */
+        /* 避免由于分配失败而导致缓存中存在陈旧数据。
+         * 对于 SET 来说是不可接受的。其他地方呢？ */
         if (comm == NREAD_SET) {
             it = item_get(key, nkey, c->thread, DONT_UPDATE);
             if (it) {
@@ -2061,7 +2066,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
         return;
     }
-    ITEM_set_cas(it, req_cas_id);
+    ITEM_set_cas(it, req_cas_id);  // 设置 CAS 值
 
     c->item = it;
 #ifdef NEED_ALIGN
@@ -2075,8 +2080,9 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 #endif
     c->rlbytes = it->nbytes;
     c->cmd = comm;
-    conn_set_state(c, conn_nread);
+    conn_set_state(c, conn_nread);  // 设置连接状态为读取数据
 }
+
 
 static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens) {
     char *key;
@@ -2172,6 +2178,27 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
 }
 
 
+/**
+ * 处理DELETE命令，用于从缓存中删除指定的键值对。
+ * @param c: 客户端连接
+ * @param tokens: 命令中的令牌数组
+ * @param ntokens: 令牌的数量
+ */
+// 主要步骤：
+//
+// 检查命令格式是否正确，包括检查是否设置了noreply标志。
+// 获取命令中指定的键和键的长度。
+// 如果启用了详细统计信息，记录键的删除操作。
+// 调用item_get_locked函数获取加锁的项目。
+// 如果找到项目，执行以下操作：
+// 记录DELETE命令的统计信息。
+// 记录删除操作的日志。
+// 从缓存中删除项目。
+// 调用STORAGE_delete删除项目的存储。
+// 释放对项目的引用。
+// 返回"DELETED"给客户端。
+// 如果未找到项目，记录删除未命中的统计信息，返回"NOT_FOUND"给客户端。
+// 最后，调用item_unlock解锁项目。
 static void process_delete_command(conn *c, token_t *tokens, const size_t ntokens) {
     char *key;
     size_t nkey;
@@ -2180,6 +2207,7 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
 
     assert(c != NULL);
 
+    // 检查命令格式是否正确
     if (ntokens > 3) {
         bool hold_is_zero = strcmp(tokens[KEY_TOKEN + 1].value, "0") == 0;
         bool sets_noreply = set_noreply_maybe(c, tokens, ntokens);
@@ -2192,40 +2220,47 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
         }
     }
 
-
+    // 获取键和键的长度
     key = tokens[KEY_TOKEN].value;
     nkey = tokens[KEY_TOKEN].length;
 
+    // 检查键的长度是否合法
     if (nkey > KEY_MAX_LENGTH) {
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
     }
 
+    // 如果启用详细统计信息，则记录键的删除操作
     if (settings.detail_enabled) {
         stats_prefix_record_delete(key, nkey);
     }
 
+    // 获取加锁的项目
     it = item_get_locked(key, nkey, c->thread, DONT_UPDATE, &hv);
     if (it) {
         MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->nkey);
 
+        // 记录删除命中的统计信息
         pthread_mutex_lock(&c->thread->stats.mutex);
         c->thread->stats.slab_stats[ITEM_clsid(it)].delete_hits++;
         pthread_mutex_unlock(&c->thread->stats.mutex);
+        // 记录删除操作的日志
         LOGGER_LOG(NULL, LOG_DELETIONS, LOGGER_DELETIONS, it, LOG_TYPE_DELETE);
+        // 从缓存中删除项目
         do_item_unlink(it, hv);
         STORAGE_delete(c->thread->storage, it);
-        do_item_remove(it);      /* release our reference */
+        do_item_remove(it);      /* 释放对项目的引用 */
         out_string(c, "DELETED");
     } else {
+        // 记录删除未命中的统计信息
         pthread_mutex_lock(&c->thread->stats.mutex);
         c->thread->stats.delete_misses++;
         pthread_mutex_unlock(&c->thread->stats.mutex);
-
         out_string(c, "NOT_FOUND");
     }
     item_unlock(hv);
 }
+
 
 static void process_verbosity_command(conn *c, token_t *tokens, const size_t ntokens) {
     unsigned int level;
@@ -2807,19 +2842,15 @@ static void process_refresh_certs_command(conn *c, token_t *tokens, const size_t
 }
 #endif
 
-// TODO: pipelined commands are incompatible with shifting connections to a
-// side thread. Given this only happens in two instances (watch and
-// lru_crawler metadump) it should be fine for things to bail. It _should_ be
-// unusual for these commands.
-// This is hard to fix since tokenize_command() mutilates the read buffer, so
-// we can't drop out and back in again.
-// Leaving this note here to spend more time on a fix when necessary, or if an
-// opportunity becomes obvious.
+// TODO: 管道命令与将连接移至侧线程不兼容。由于这只在两个情况下发生（watch和lru_crawler metadump），因此退出应该是可以的。
+// 这很难修复，因为tokenize_command()破坏了读缓冲区，所以我们无法再次退出并重新进入。
+// 在需要时，或者如果出现明显的机会，留下这个注释，以便花更多时间修复。
 void process_command_ascii(conn *c, char *command) {
 
+    // 存储命令的token数组
     token_t tokens[MAX_TOKENS];
-    size_t ntokens;
-    int comm;
+    size_t ntokens;  // 命令中的token数
+    int comm;  // 命令类型
 
     assert(c != NULL);
 
@@ -2829,25 +2860,23 @@ void process_command_ascii(conn *c, char *command) {
         fprintf(stderr, "<%d %s\n", c->sfd, command);
 
     /*
-     * for commands set/add/replace, we build an item and read the data
-     * directly into it, then continue in nread_complete().
+     * 对于set/add/replace命令，我们构建一个项目并直接将数据读入其中，然后继续nread_complete()。
      */
 
-    // Prep the response object for this query.
+    // 为此查询准备响应对象。
     if (!resp_start(c)) {
         conn_set_state(c, conn_closing);
         return;
     }
 
-    c->thread->cur_sfd = c->sfd; // cuddle sfd for logging.
+    c->thread->cur_sfd = c->sfd; // 为记录 cuddle sfd。
     ntokens = tokenize_command(command, tokens, MAX_TOKENS);
-    // All commands need a minimum of two tokens: cmd and NULL finalizer
-    // There are also no valid commands shorter than two bytes.
+    // 所有命令至少需要两个token：cmd和NULL终结符
+    // 也没有长度小于两字节的有效命令。
     if (ntokens < 2 || tokens[COMMAND_TOKEN].length < 2) {
         out_string(c, "ERROR");
         return;
     }
-
     // Meta commands are all 2-char in length.
     char first = tokens[COMMAND_TOKEN].value[0];
     if (first == 'm' && tokens[COMMAND_TOKEN].length == 2) {
