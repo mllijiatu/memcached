@@ -951,12 +951,13 @@ item *item_alloc(const char *key, size_t nkey, client_flags_t flags, rel_time_t 
  * Returns an item if it hasn't been marked as expired,
  * lazy-expiring as needed.
  */
-item *item_get(const char *key, const size_t nkey, LIBEVENT_THREAD *t, const bool do_update) {
+// 这边的 item_* 系列的方法，就是Memcached核心存储块的接口
+item *item_get(const char *key, const size_t nkey) {
     item *it;
     uint32_t hv;
-    hv = hash(key, nkey);
-    item_lock(hv);
-    it = do_item_get(key, nkey, hv, t, do_update);
+    hv = hash(key, nkey); // 对key进行hash,返回一个uint32_t类型的值
+    item_lock(hv); // 块锁，当取数据的时候，不允许其他的操作，保证取数据的原子性
+    it = do_item_get(key, nkey, hv);
     item_unlock(hv);
     return it;
 }

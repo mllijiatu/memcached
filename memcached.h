@@ -586,37 +586,40 @@ extern struct settings settings;
 #define ITEM_KEY_BINARY 4096
 
 /**
- * Structure for storing items within memcached.
+ * 用于在memcached中存储项目的结构。
  */
 typedef struct _stritem {
-    /* Protected by LRU locks */
-    struct _stritem *next;
-    struct _stritem *prev;
-    /* Rest are protected by an item lock */
-    struct _stritem *h_next;    /* hash chain next */
-    rel_time_t      time;       /* least recent access */
-    rel_time_t      exptime;    /* expire time */
-    int             nbytes;     /* size of data */
-    unsigned short  refcount;
-    uint16_t        it_flags;   /* ITEM_* above */
-    uint8_t         slabs_clsid;/* which slab class we're in */
-    uint8_t         nkey;       /* key length, w/terminating null and padding */
-    /* this odd type prevents type-punning issues when we do
-     * the little shuffle to save space when not using CAS. */
+    /* LRU锁保护 */
+    struct _stritem *next;  // 下一个节点
+    struct _stritem *prev;  // 前一个节点
+    /* 以下由项目锁保护 */
+    struct _stritem *h_next;    /* 哈希链的下一个节点 */
+    rel_time_t      time;       /* 最近的访问时间 */
+    rel_time_t      exptime;    /* 过期时间 */
+    int             nbytes;     /* 数据大小 */
+    unsigned short  refcount;   /* 引用计数 */
+    uint16_t        it_flags;   /* 上述ITEM_*标志 */
+    uint8_t         slabs_clsid;/* 我们所在的slab类别 */
+    uint8_t         nkey;       /* 键的长度，包括终止符和填充 */
+    /* 此奇怪的类型在不使用CAS时，在进行空间节省的小操作时防止类型混淆问题。 */
     union {
-        uint64_t cas;
+        uint64_t cas;  // 如果使用CAS，则有8字节的CAS
         char end;
     } data[];
-    /* if it_flags & ITEM_CAS we have 8 bytes CAS */
-    /* then null-terminated key */
-    /* then " flags length\r\n" (no terminating null) */
-    /* then data with terminating \r\n (no terminating null; it's binary!) */
+    /* 如果 it_flags & ITEM_CAS，则有8字节CAS */
+    /* 然后是以null结尾的键 */
+    /* 然后是 " flags length\r\n"（没有终止null） */
+    /* 然后是带有终止 \r\n 的数据（没有终止null；它是二进制的！） */
 } item;
 
-// TODO: If we eventually want user loaded modules, we can't use an enum :(
+// TODO: 如果我们最终想要用户加载的模块，我们不能使用枚举 :(
 enum crawler_run_type {
-    CRAWLER_AUTOEXPIRE=0, CRAWLER_EXPIRED, CRAWLER_METADUMP, CRAWLER_MGDUMP
+    CRAWLER_AUTOEXPIRE=0,  // 自动过期
+    CRAWLER_EXPIRED,       // 过期
+    CRAWLER_METADUMP,      // 元数据转储
+    CRAWLER_MGDUMP          // 管理数据转储
 };
+
 
 typedef struct {
     struct _stritem *next;
