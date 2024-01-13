@@ -67,14 +67,23 @@ static pthread_mutex_t lru_maintainer_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cas_id_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t stats_sizes_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/**
+ * 重置缓存项的统计信息。
+ */
 void item_stats_reset(void) {
-    int i;
-    for (i = 0; i < LARGEST_ID; i++) {
+    // 遍历所有可能的LRU队列
+    for (int i = 0; i < LARGEST_ID; i++) {
+        // 使用pthread_mutex_lock函数锁定当前LRU队列对应的互斥锁
         pthread_mutex_lock(&lru_locks[i]);
+
+        // 使用memset函数将当前LRU队列的统计信息清零
         memset(&itemstats[i], 0, sizeof(itemstats_t));
+
+        // 使用pthread_mutex_unlock函数解锁当前LRU队列对应的互斥锁
         pthread_mutex_unlock(&lru_locks[i]);
     }
 }
+
 
 /* called with class lru lock held */
 void do_item_stats_add_crawl(const int i, const uint64_t reclaimed,
@@ -121,18 +130,31 @@ void set_cas_id(uint64_t new_cas) {
     pthread_mutex_unlock(&cas_id_lock);
 }
 
+/**
+ * 检查缓存项是否已被清除。
+ *
+ * @param it 指向要检查的缓存项的指针
+ * @return 如果缓存项已被清除，则返回1；否则返回0
+ */
 int item_is_flushed(item *it) {
+    // 获取全局设置中的最旧时间和最旧CAS值
     rel_time_t oldest_live = settings.oldest_live;
     uint64_t cas = ITEM_get_cas(it);
     uint64_t oldest_cas = settings.oldest_cas;
+
+    // 如果最旧时间为0或者大于当前时间，说明缓存项未被清除
     if (oldest_live == 0 || oldest_live > current_time)
         return 0;
-    if ((it->time <= oldest_live)
-            || (oldest_cas != 0 && cas != 0 && cas < oldest_cas)) {
+
+    // 如果缓存项的时间早于等于最旧时间，或者最旧CAS值不为0且缓存项的CAS值小于最旧CAS值，说明缓存项已被清除
+    if ((it->time <= oldest_live) || (oldest_cas != 0 && cas != 0 && cas < oldest_cas)) {
         return 1;
     }
+
+    // 缓存项未被清除
     return 0;
 }
+
 
 /* must be locked before call */
 unsigned int do_get_lru_size(uint32_t id) {
@@ -415,19 +437,40 @@ void do_item_link_fixup(item *it) {
     return;
 }
 
-static void do_item_link_q(item *it) { /* item is the new head */
-    item **head, **tail;
+/**
+ * 将缓存项链接到LRU队列中。
+ *
+ * @param it 指向要链接的缓存项的指针
+ */
+static void do_item_link_q(item *it) {
+    // 确保缓存项不是已经被分配的slab类别
     assert((it->it_flags & ITEM_SLABBED) == 0);
 
+    // 获取当前slab类别的LRU队列头尾指针
+    item **head, **tail;
     head = &heads[it->slabs_clsid];
     tail = &tails[it->slabs_clsid];
+
+    // 确保缓存项不是当前LRU队列的头
     assert(it != *head);
+
+    // 确保LRU队列要么同时为空，要么同时非空
     assert((*head && *tail) || (*head == 0 && *tail == 0));
+
+    // 初始化缓存项的prev和next指针
     it->prev = 0;
     it->next = *head;
+
+    // 如果缓存项的next指针非空，更新next指针对应的缓存项的prev指针
     if (it->next) it->next->prev = it;
+
+    // 更新LRU队列头指针为当前缓存项
     *head = it;
+
+    // 如果LRU队列尾指针为空，更新为当前缓存项
     if (*tail == 0) *tail = it;
+
+    // 更新当前slab类别的LRU队列中的缓存项数量
     sizes[it->slabs_clsid]++;
 #ifdef EXTSTORE
     if (it->it_flags & ITEM_HDR) {
@@ -442,11 +485,22 @@ static void do_item_link_q(item *it) { /* item is the new head */
     return;
 }
 
+/**
+ * 将缓存项链接到LRU队列中的特定位置。
+ *
+ * @param it 指向要链接的缓存项的指针
+ */
 static void item_link_q(item *it) {
+    // 使用pthread_mutex_lock函数锁定LRU队列对应的互斥锁
     pthread_mutex_lock(&lru_locks[it->slabs_clsid]);
+
+    // 调用do_item_link_q函数，将缓存项链接到LRU队列中
     do_item_link_q(it);
+
+    // 解锁LRU队列对应的互斥锁
     pthread_mutex_unlock(&lru_locks[it->slabs_clsid]);
 }
+
 
 static void item_link_q_warm(item *it) {
     pthread_mutex_lock(&lru_locks[it->slabs_clsid]);
@@ -1022,7 +1076,7 @@ void item_stats_sizes(ADD_STAT add_stats, void *c) {
 //
 // 调用 assoc_find 在哈希表中查找项目。
 // 如果找到项目，增加其引用计数。
-// 执行懒惰过期逻辑，包括处理flush和过期的情况。
+// 执行 懒惰过期 逻辑，包括处理flush和过期的情况。
 // 如果启用更新，并且项目未过期，则执行do_item_bump更新项目的LRU时间。
 // 记录查找日志，包括项目是否找到，被刷新或过期，以及其他相关信息。
 // 返回找到的项目或NULL。
@@ -1828,16 +1882,24 @@ void do_item_unlinktail_q(item *it) {
     return;
 }
 
-/* This is too convoluted, but it's a difficult shuffle. Try to rewrite it
- * more clearly. */
+/**
+ * 重新排列缓存项，将指定缓存项移到队列头部，并返回下一个缓存项。
+ *
+ * @param it 指向要重新排列的缓存项的指针
+ * @return 指向下一个缓存项的指针
+ */
 item *do_item_crawl_q(item *it) {
     item **head, **tail;
+    // 确保缓存项的标志为1（特定值）
     assert(it->it_flags == 1);
+    // 确保缓存项的字节数为0
     assert(it->nbytes == 0);
+
+    // 获取当前slab类别的LRU队列头尾指针
     head = &heads[it->slabs_clsid];
     tail = &tails[it->slabs_clsid];
 
-    /* We've hit the head, pop off */
+    // 如果缓存项是队列头，将其弹出
     if (it->prev == 0) {
         assert(*head == it);
         if (it->next) {
@@ -1845,41 +1907,44 @@ item *do_item_crawl_q(item *it) {
             assert(it->next->prev == it);
             it->next->prev = 0;
         }
-        return NULL; /* Done */
+        return NULL; /* 完成 */
     }
 
-    /* Swing ourselves in front of the next item */
-    /* NB: If there is a prev, we can't be the head */
+    // 将缓存项移到队列头
     assert(it->prev != it);
     if (it->prev) {
+        // 如果prev是队列头，更新队列头指针为当前缓存项
         if (*head == it->prev) {
-            /* Prev was the head, now we're the head */
             *head = it;
         }
+        // 如果当前缓存项是队列尾，更新队列尾指针为prev
         if (*tail == it) {
-            /* We are the tail, now they are the tail */
             *tail = it->prev;
         }
         assert(it->next != it);
         if (it->next) {
             assert(it->prev->next == it);
+            // 调整prev和next指针，将当前缓存项移到队列头
             it->prev->next = it->next;
             it->next->prev = it->prev;
         } else {
-            /* Tail. Move this above? */
+            // 当前缓存项是队列尾，将prev的next指针设为0
             it->prev->next = 0;
         }
-        /* prev->prev's next is it->prev */
+        // 调整prev、next指针，将当前缓存项移到队列头
         it->next = it->prev;
         it->prev = it->next->prev;
         it->next->prev = it;
-        /* New it->prev now, if we're not at the head. */
+        // 如果当前缓存项不是队列头，更新prev的next指针为当前缓存项
         if (it->prev) {
             it->prev->next = it;
         }
     }
+    // 确保prev和next指针均不等于当前缓存项
     assert(it->next != it);
     assert(it->prev != it);
 
-    return it->next; /* success */
+    // 返回下一个缓存项的指针
+    return it->next; /* 成功 */
 }
+
